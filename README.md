@@ -8,6 +8,6 @@ Additional small changes planned to get it to work with the pre-built RaspberryP
 TODO:
 -----
 
-** Copy setup instructions from my mlbrowser fork.
-** Either patch makefile or change code to ignore QT_OPENGL_LIB defined from environment.
+    Copy setup instructions from my mlbrowser fork.
+    Either patch makefile or change code to ignore QT_OPENGL_LIB defined from environment.
 
