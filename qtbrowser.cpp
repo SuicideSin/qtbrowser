@@ -29,15 +29,6 @@
 #include <QNetworkProxy>
 #include <QNetworkReply>
 #include <QNetworkAccessManager>
-#include <QSslError>
-
-#ifdef QT_BUILD_WITH_OPENGL
-#include <QtOpenGL/QGLWidget>
-#endif
-#include <QGraphicsView>
-#include <QGraphicsScene>
-#include <QGraphicsWebView>
-#include <QGraphicsSceneContextMenuEvent>
 
 #include <QDesktopWidget>
  
@@ -47,43 +38,8 @@
 #include <QPixmapCache>
 #include <QSettings>
 
-class SSLSlotHandler : public QObject {
-Q_OBJECT
-public slots:
-    void sslError(QNetworkReply* qnr, const QList<QSslError> & errlist) {
-        foreach (QSslError err, errlist)
-            qDebug() << "[ssl error]" << err;
-        qnr->ignoreSslErrors();
-    }
-};
-
-class GraphicsWebView : public QGraphicsWebView {
-protected:
-    void contextMenuEvent(QGraphicsSceneContextMenuEvent* ev) {
-        if (ev != NULL)
-            ev->ignore();
-    }
-};
-
-class WebPage : public QWebPage {
-protected:
-    void javaScriptConsoleMessage(const QString& message, int lineNumber, const QString& source) {
-        if (source.isEmpty()) {
-            qDebug() << "[console]" << message.toUtf8().constData();
-        } else {
-            QString s = "[" + source + ":" + QString::number(lineNumber) + "]";
-            qDebug() << "[console]" << s.toUtf8().constData() << message.toUtf8().constData();
-        }
-    }
-
-    void javaScriptAlert(QWebFrame*, const QString& message) {
-        qDebug() << "[alert]  " << message.toUtf8().constData();
-    }
-
-    bool shouldInterruptJavaScript() {
-        return false;
-    }
-};
+#include "webview.h"
+#include "sslhandler.h"
 
 void help(void) {
   printf("%s",
@@ -91,9 +47,13 @@ void help(void) {
     " Usage: qtbrowser --url=http://www.example.org/                                \n"
     " ------------------------------------------------------------------------------\n"
     "  --help                         Print this help page and exit                 \n"
+#ifdef QT_BUILD_WITH_QML_API
+    "  --webkit=<version>             WebKit mode (1=WK1 (default), 2=WK2)          \n"
+#endif
     "  --url=<url>                    The URL to view (http:...|file:...|...)       \n"
     "  --app-name=<name>              appName used in User-Agent; default is none   \n"
     "  --app-version=<version>        appVers used in User-Agent; default is none   \n"
+    "  --user-agent=<string>          Set a custom User-Agent                       \n"
     "  --missing-image=<no|file>      Disable or change missing image icon          \n"
     "  --auto-load-images=<on|off>    Automatic image loading (default: on)         \n"
     "  --javascript=<on|off>          JavaScript execution (default: on)            \n"
@@ -137,26 +97,7 @@ int main(int argc, char *argv[]) {
     path = QDesktopServices::storageLocation(QDesktopServices::DataLocation);
 #endif
 
-    QGraphicsView g;
-    g.setScene(new QGraphicsScene(&g));
-    g.resize(size);
-    g.scene()->setItemIndexMethod(QGraphicsScene::NoIndex);
-    g.setAttribute(Qt::WA_DeleteOnClose);
-    g.setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    g.setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    g.setAlignment(Qt::AlignTop | Qt::AlignHCenter);
-    g.setFrameStyle(QFrame::NoFrame);
-#ifdef QT_BUILD_WITH_OPENGL
-    g.setViewport(new QGLWidget());
-#endif
-    g.showFullScreen();
-
     QPixmapCache::setCacheLimit(20 * 1024);
-
-    WebPage page;
-    GraphicsWebView view;
-    view.setPage(&page);
-    view.resize(size);
 
     QWebSettings* settings = QWebSettings::globalSettings();
     settings->setMaximumPagesInCache(1);
@@ -169,6 +110,7 @@ int main(int argc, char *argv[]) {
     settings->setAttribute(QWebSettings::WebGLEnabled, true);
 #endif
 #endif
+    settings->setAttribute(QWebSettings::WebAudioEnabled, true);
     settings->setAttribute(QWebSettings::PluginsEnabled, false);
     settings->setAttribute(QWebSettings::DeveloperExtrasEnabled, true);
     settings->setAttribute(QWebSettings::WebSecurityEnabled, false);
@@ -183,6 +125,13 @@ int main(int argc, char *argv[]) {
     settings->setWebGraphic(QWebSettings::MissingPluginGraphic, QPixmap());
 
     QUrl url;
+
+    int mode = 1;
+    bool fullscreen = false;
+    QString userAgent;
+    QUrl proxyUrl;
+    bool validateCa = true;
+    unsigned int inspectorPort = 0;
 
     for (int ax = 1; ax < argc; ++ax) {
         size_t nlen;
@@ -212,7 +161,7 @@ int main(int argc, char *argv[]) {
 #endif
 #endif
         } else if (strcmp("--full-viewport-update", s) == 0) {
-            g.setViewportUpdateMode(QGraphicsView::FullViewportUpdate);
+            fullscreen = true;
         }
 
         value = strchr(s, '=');
@@ -225,6 +174,8 @@ int main(int argc, char *argv[]) {
             a.setApplicationName(value);
         } else if (strncmp("--app-version", s, nlen) == 0) {
             a.setApplicationVersion(value);
+        } else if (strncmp("--user-agent", s, nlen) == 0) {
+            userAgent = value;
         } else if (strncmp("--missing-image", s, nlen) == 0) {
             if (strcmp(value, "no") == 0)
                 settings->setWebGraphic(QWebSettings::MissingImageGraphic, QPixmap());
@@ -241,7 +192,7 @@ int main(int argc, char *argv[]) {
         } else if (strncmp("--websecurity", s, nlen) == 0) {
             webSettingAttribute(QWebSettings::WebSecurityEnabled, value);
         } else if (strncmp("--inspector", s, nlen) == 0) {
-            page.setProperty("_q_webInspectorServerPort", (unsigned int)atoi(value));
+            inspectorPort = (unsigned int)atoi(value);
         } else if (strncmp("--max-cached-pages", s, nlen) == 0) {
             settings->setMaximumPagesInCache((unsigned int)atoi(value));
         } else if (strncmp("--pixmap-cache", s, nlen) == 0) {
@@ -251,27 +202,57 @@ int main(int argc, char *argv[]) {
             if (l.length() == 3)
                 settings->setObjectCacheCapacities(l.at(0).toInt()*1024*1024, l.at(1).toInt()*1024*1024, l.at(2).toInt()*1024*1024);
         } else if (strncmp("--http-proxy", s, nlen) == 0) {
-            QUrl p = QUrl::fromEncoded(value);
-            QNetworkAccessManager* manager = page.networkAccessManager();
-            QNetworkProxy proxy = QNetworkProxy(QNetworkProxy::HttpProxy, p.host(), p.port(80), p.userName(), p.password());
-            manager->setProxy(proxy);
+            proxyUrl = QUrl::fromEncoded(value);
         } else if (strncmp("--ini", s, nlen) == 0) {
             QSettings ini(value, QSettings::IniFormat);
             url = QUrl(ini.value("Network/firstUrl", QApplication::applicationDirPath()).toString());
         } else if (strncmp("--validate-ca", s, nlen) == 0) {
-            if (QString(value) == "off") {
-                QObject::connect(page.networkAccessManager(), SIGNAL(sslErrors(QNetworkReply*, const QList<QSslError> &)), new SSLSlotHandler(), SLOT(sslError(QNetworkReply*, const QList<QSslError> &)));
+            if (QString(value) == "off")
+                validateCa = false;
+        } else if (strncmp("--webkit", s, nlen) == 0) {
+            mode = QString(value) == "2" ? 2 : 1;
+#ifndef QT_BUILD_WITH_QML_API
+            if (mode == 2) {
+                printf("WebKit2 not supported in this build.\n");
+                return 0;
             }
+#endif
         }
     }
 
-    view.load(url.isEmpty() ? QUrl("http://www.google.com") : url);
-    view.setFocus();
-    view.show();
+#ifdef QT_BUILD_WITH_QML_API
+    WebView& webview = (mode==2) ? dynamic_cast<WebView&>(WK2WebView::instance()) : dynamic_cast<WebView&>(WK1WebView::instance());
+#else
+    WebView& webview = dynamic_cast<WebView&>(WK1WebView::instance());
+#endif
 
-    g.scene()->addItem(&view);
+    if (fullscreen)
+        webview.setViewportUpdateMode(WebView::FullViewport);
+
+    if (!userAgent.isEmpty())
+        webview.setUserAgent(userAgent);
+
+    QWebPage& page = dynamic_cast<QWebPage&>(webview.page());
+    if (inspectorPort)
+        page.setProperty("_q_webInspectorServerPort", inspectorPort);
+
+    if (!proxyUrl.isEmpty()) {
+        QNetworkAccessManager* manager = page.networkAccessManager();
+        QNetworkProxy proxy = QNetworkProxy(QNetworkProxy::HttpProxy, proxyUrl.host(), proxyUrl.port(80), proxyUrl.userName(), proxyUrl.password());
+        manager->setProxy(proxy);
+     }
+
+    if (!validateCa)
+        QObject::connect(page.networkAccessManager(), SIGNAL(sslErrors(QNetworkReply*, const QList<QSslError> &)), new SSLSlotHandler(), SLOT(sslError(QNetworkReply*, const QList<QSslError> &)));
+
+    webview.initialize();
+
+    webview.load(url.isEmpty() ? QUrl("http://www.google.com") : url);
+    webview.resize(size);
+    webview.setFocus();
+    webview.show();
 
     return a.exec();
-}
 
-#include "qtbrowser.moc"
+    webview.destroy();
+}
