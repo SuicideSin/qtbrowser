@@ -37,9 +37,48 @@
 #include <QDesktopServices>
 #include <QPixmapCache>
 #include <QSettings>
+#include <QWebSecurityOrigin>
+
 
 #include "webview.h"
 #include "sslhandler.h"
+
+
+#ifdef  QT_BUILD_WITH_SYSLOG
+// Send the output to the system logger, instead of to stdout/stderr
+#include <QtDebug>
+#include <syslog.h>
+
+
+#if QT_VERSION >= QT_VERSION_CHECK(5, 0, 0)
+void mySyslogMessageHandler(QtMsgType type, const QMessageLogContext &, const QString & str)
+{
+  const char * msg = str.toUtf8().data();
+#else
+void mySyslogMessageHandler(QtMsgType type, const char *msg)
+{
+#endif
+  openlog("QTBROWSER", LOG_ODELAY, LOG_USER);
+	switch (type) {
+	case QtDebugMsg:
+    syslog(LOG_DEBUG, msg);
+		break;
+	case QtWarningMsg:
+    syslog(LOG_WARNING, msg);
+	  break;
+	case QtCriticalMsg:
+    syslog(LOG_CRIT, msg);
+	  break;
+	case QtFatalMsg:
+  default :
+    syslog(LOG_ERR, msg);
+    break;
+	}
+
+  closelog();
+}
+#endif  // QT_BUILD_WITH_SYSLOG
+
 
 void help(void) {
   printf("%s",
@@ -47,6 +86,7 @@ void help(void) {
     " Usage: qtbrowser --url=http://www.example.org/                                \n"
     " ------------------------------------------------------------------------------\n"
     "  --help                         Print this help page and exit                 \n"
+    "  --version                      Print the version information of qtbrowser    \n"
 #ifdef QT_BUILD_WITH_QML_API
     "  --webkit=<version>             WebKit mode (1=WK1 (default), 2=WK2)          \n"
 #endif
@@ -59,7 +99,7 @@ void help(void) {
     "  --javascript=<on|off>          JavaScript execution (default: on)            \n"
     "  --private-browsing=<on|off>    Private browsing (default: off)               \n"
     "  --spatial-navigation=<on|off>  Spatial Navigation (default: off)             \n"
-    "  --websecurity=<on|off>         WebSecurity (default: off)                    \n"
+    "  --websecurity=<on|off>         WebSecurity (default: on)                    \n"
     "  --inspector=<port>             Inspector (default: disabled)                 \n"
     "  --max-cached-pages=<n>         Maximum pages in cache (default: 1)           \n"
     "  --pixmap-cache=<n>             Pixmap Cache size in MB (default: 20)         \n"
@@ -67,15 +107,25 @@ void help(void) {
     "  --http-proxy=<url>             Address for HTTP proxy server (default: none) \n"
     "  --transparent                  Make Qt background color transparent          \n"
     "  --full-viewport-update         Set rendering to full viewport updating       \n"
+    "  --no-console-log               Do not send out any log lines.                \n"
+    "  --short-console-log            Do not send all infomrationas log line        \n"
 #if (QT_VERSION >= QT_VERSION_CHECK(5, 0, 0))
 #ifdef QT_BUILD_WITH_OPENGL
     "  --tiled-backing-store          Enable tiled backing store                    \n"
 #endif
 #endif
     "  --validate-ca=<on|off>         Validate Root CA certificates (default: on)   \n"
+    "  --cookie-storage=<path>        Set cookie storage path                       \n"
     " ------------------------------------------------------------------------------\n"
     " http://www.metrological.com - (c) 2014 Metrological - support@metrological.com\n"
     "");
+}
+
+void print_version() {
+  // The BROWSERVERSION information comes from the makefile/git tagging policy
+  //  This still needs to be figured out, so for now it is hard-coded
+#define BROWSERVERSION  "2.0.10"
+  printf("Browser version: %s\n\n", BROWSERVERSION);
 }
 
 void webSettingAttribute(QWebSettings::WebAttribute option, const QString& value) {
@@ -85,8 +135,21 @@ void webSettingAttribute(QWebSettings::WebAttribute option, const QString& value
         QWebSettings::globalSettings()->setAttribute(option, false);
 }
 
+
 int main(int argc, char *argv[]) {
-    QApplication a(argc, argv);
+    print_version();
+
+    QApplication application(argc, argv);
+
+
+#ifdef QT_BUILD_WITH_SYSLOG
+#if QT_VERSION >= QT_VERSION_CHECK(5, 0, 0)
+    qInstallMessageHandler(mySyslogMessageHandler);
+#else
+    qInstallMsgHandler(mySyslogMessageHandler);
+#endif
+#endif  // QT_BUILD_WITH_SYSLOG
+
 
     QSize size = QApplication::desktop()->screenGeometry().size();
 
@@ -113,7 +176,8 @@ int main(int argc, char *argv[]) {
     settings->setAttribute(QWebSettings::WebAudioEnabled, true);
     settings->setAttribute(QWebSettings::PluginsEnabled, false);
     settings->setAttribute(QWebSettings::DeveloperExtrasEnabled, true);
-    settings->setAttribute(QWebSettings::WebSecurityEnabled, false);
+    settings->setAttribute(QWebSettings::WebSecurityEnabled, true);
+    settings->setAttribute(QWebSettings::LocalContentCanAccessRemoteUrls, true);
     settings->setAttribute(QWebSettings::LocalStorageEnabled, true);
     settings->enablePersistentStorage(path);
     settings->setAttribute(QWebSettings::OfflineWebApplicationCacheEnabled, true);
@@ -132,7 +196,8 @@ int main(int argc, char *argv[]) {
     QUrl proxyUrl;
     bool validateCa = true;
     unsigned int inspectorPort = 0;
-
+    LogLevel requiredLogging = LOGGING_EXTENDED;
+ 
     for (int ax = 1; ax < argc; ++ax) {
         size_t nlen;
 
@@ -142,6 +207,8 @@ int main(int argc, char *argv[]) {
         // boolean options
         if (strcmp("--help", s) == 0) {
             help();
+            return 0;
+        } else if (strcmp("--version", s) == 0) {
             return 0;
         } else if (strcmp("--transparent", s) == 0) {
             QPalette palette;
@@ -153,7 +220,7 @@ int main(int argc, char *argv[]) {
             palette.setColor(QPalette::Active, QPalette::Base, Qt::transparent);
             palette.setColor(QPalette::Inactive, QPalette::Window, Qt::transparent);
             palette.setColor(QPalette::Inactive, QPalette::Base, Qt::transparent);
-            a.setPalette(palette);
+            application.setPalette(palette);
 #if (QT_VERSION >= QT_VERSION_CHECK(5, 0, 0))
 #ifdef QT_BUILD_WITH_OPENGL
         } else if (strcmp("--tiled-backing-store", s) == 0) {
@@ -171,9 +238,9 @@ int main(int argc, char *argv[]) {
         if (strncmp("--url", s, nlen) == 0) {
             url = QUrl(value);
         } else if (strncmp("--app-name", s, nlen) == 0) {
-            a.setApplicationName(value);
+            application.setApplicationName(value);
         } else if (strncmp("--app-version", s, nlen) == 0) {
-            a.setApplicationVersion(value);
+            application.setApplicationVersion(value);
         } else if (strncmp("--user-agent", s, nlen) == 0) {
             userAgent = value;
         } else if (strncmp("--missing-image", s, nlen) == 0) {
@@ -195,6 +262,10 @@ int main(int argc, char *argv[]) {
             inspectorPort = (unsigned int)atoi(value);
         } else if (strncmp("--max-cached-pages", s, nlen) == 0) {
             settings->setMaximumPagesInCache((unsigned int)atoi(value));
+        } else if (strncmp("--no-console-log", s, nlen) == 0) {
+            requiredLogging = LOGGING_NONE;
+        } else if (strncmp("--short-console-log", s, nlen) == 0) {
+            requiredLogging = LOGGING_SHORT;
         } else if (strncmp("--pixmap-cache", s, nlen) == 0) {
             QPixmapCache::setCacheLimit((unsigned int)atoi(value) * 1024);
         } else if (strncmp("--object-cache", s, nlen) == 0) {
@@ -217,24 +288,34 @@ int main(int argc, char *argv[]) {
                 return 0;
             }
 #endif
+        } else if (strncmp("--cookie-storage", s, nlen) == 0) {
+          QString cookiePath(value);
+          // Create persistent cookie-jar, path to the cookie jar is set to the
+          //   default data path unless it was overruled via command-line option
+          settings->enablePersistentCookieStorage(cookiePath);
         }
     }
 
-#ifdef QT_BUILD_WITH_QML_API
-    WebView& webview = (mode==2) ? dynamic_cast<WebView&>(WK2WebView::instance()) : dynamic_cast<WebView&>(WK1WebView::instance());
-#else
-    WebView& webview = dynamic_cast<WebView&>(WK1WebView::instance());
-#endif
+    IWebView* webview = IWebView::instance (mode == 1 ? WEBKIT_1 : WEBKIT_2, requiredLogging);
 
     if (fullscreen)
-        webview.setViewportUpdateMode(WebView::FullViewport);
+        webview->setViewportUpdateMode(FullViewport);
 
-    if (!userAgent.isEmpty())
-        webview.setUserAgent(userAgent);
-
-    QWebPage& page = dynamic_cast<QWebPage&>(webview.page());
+    WebPage& page = webview->page();
     if (inspectorPort)
         page.setProperty("_q_webInspectorServerPort", inspectorPort);
+
+    if (!userAgent.isEmpty())
+       page.setDefaultUserAgent(userAgent);
+
+    // Implement the whitelist functionality, allowing
+    QWebSecurityOrigin originHttp(QString("http://widgets.metrological.com"));
+    originHttp.addAccessWhitelistEntry("http",  "www.youtube.com", QWebSecurityOrigin::AllowSubdomains);
+    originHttp.addAccessWhitelistEntry("https", "www.youtube.com", QWebSecurityOrigin::AllowSubdomains);
+
+    QWebSecurityOrigin originHttps(QString("https://widgets.metrological.com"));
+    originHttps.addAccessWhitelistEntry("http",  "www.youtube.com", QWebSecurityOrigin::AllowSubdomains);
+    originHttps.addAccessWhitelistEntry("https", "www.youtube.com", QWebSecurityOrigin::AllowSubdomains);
 
     if (!proxyUrl.isEmpty()) {
         QNetworkAccessManager* manager = page.networkAccessManager();
@@ -245,14 +326,16 @@ int main(int argc, char *argv[]) {
     if (!validateCa)
         QObject::connect(page.networkAccessManager(), SIGNAL(sslErrors(QNetworkReply*, const QList<QSslError> &)), new SSLSlotHandler(), SLOT(sslError(QNetworkReply*, const QList<QSslError> &)));
 
-    webview.initialize();
+    webview->initialize();
 
-    webview.load(url.isEmpty() ? QUrl("http://www.google.com") : url);
-    webview.resize(size);
-    webview.setFocus();
-    webview.show();
+    webview->load(url.isEmpty() ? QUrl("http://www.google.com") : url);
+    webview->resize(size);
+    webview->setFocus();
+    webview->show();
 
-    return a.exec();
+    int result = application.exec();
 
-    webview.destroy();
+    webview->destroy();
+
+    return (result);
 }

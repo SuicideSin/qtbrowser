@@ -6,11 +6,18 @@
 #include <QWebFrame>
 #include <QUrl>
 
+enum LogLevel
+{
+    LOGGING_NONE,
+    LOGGING_SHORT,
+    LOGGING_EXTENDED
+};
+
 class WebPage : public QWebPage
 {
 public:
-    WebPage();
-    void setUserAgentForUrl(const QUrl& url, QString agent);
+    WebPage(LogLevel logLevel);
+    void setDefaultUserAgent(QString agent);
 
 protected:
     void javaScriptConsoleMessage(const QString& message, int lineNumber, const QString& source);
@@ -19,8 +26,9 @@ protected:
     QString userAgentForUrl(const QUrl& url) const;
 
 private:
-    QUrl url;
+    QString defaultUserAgent;
     QHash<QString, QString> userAgents;
+    LogLevel logLevel;
 };
 
 #endif // __WEBPAGE__
