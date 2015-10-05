@@ -15,12 +15,13 @@ SOURCES     += \
                webview.cpp \
                qtbrowser.cpp
 
-contains(QT_CONFIG, opengl) {
-   DEFINES += QT_BUILD_WITH_OPENGL
-   message("Building with OpenGL support.")
-} else {
-   warning("OpenGL support is not available, qtbrowser might work but supported features and performance are limited.")
-}
+# No we don't want OpenGL right now.
+#contains(QT_CONFIG, opengl) {
+#   DEFINES += QT_BUILD_WITH_OPENGL
+#   message("Building with OpenGL support.")
+#} else {
+#   warning("OpenGL support is not available, qtbrowser might work but supported features and performance are limited.")
+#}
 
 #contains(QT_CONFIG, opengles1) {}
 #contains(QT_CONFIG, opengles2) {}

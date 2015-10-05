@@ -176,7 +176,7 @@ int main(int argc, char *argv[]) {
     settings->setAttribute(QWebSettings::WebAudioEnabled, true);
     settings->setAttribute(QWebSettings::PluginsEnabled, false);
     settings->setAttribute(QWebSettings::DeveloperExtrasEnabled, true);
-    settings->setAttribute(QWebSettings::WebSecurityEnabled, true);
+    //settings->setAttribute(QWebSettings::WebSecurityEnabled, true);
     settings->setAttribute(QWebSettings::LocalContentCanAccessRemoteUrls, true);
     settings->setAttribute(QWebSettings::LocalStorageEnabled, true);
     settings->enablePersistentStorage(path);
@@ -257,7 +257,7 @@ int main(int argc, char *argv[]) {
         } else if (strncmp("--spatial-navigation", s, nlen) == 0) {
             webSettingAttribute(QWebSettings::SpatialNavigationEnabled, value);
         } else if (strncmp("--websecurity", s, nlen) == 0) {
-            webSettingAttribute(QWebSettings::WebSecurityEnabled, value);
+            //webSettingAttribute(QWebSettings::WebSecurityEnabled, value);
         } else if (strncmp("--inspector", s, nlen) == 0) {
             inspectorPort = (unsigned int)atoi(value);
         } else if (strncmp("--max-cached-pages", s, nlen) == 0) {
@@ -292,7 +292,7 @@ int main(int argc, char *argv[]) {
           QString cookiePath(value);
           // Create persistent cookie-jar, path to the cookie jar is set to the
           //   default data path unless it was overruled via command-line option
-          settings->enablePersistentCookieStorage(cookiePath);
+          //settings->enablePersistentCookieStorage(cookiePath);
         }
     }
 
